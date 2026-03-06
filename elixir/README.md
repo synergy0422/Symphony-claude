@@ -148,6 +148,79 @@ codex:
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
 
+## Dual Backend Support
+
+Symphony supports two agent backends: **Codex** (default) and **Claude**. The backend is selected
+via the `agent.backend` configuration option in `WORKFLOW.md`.
+
+### Codex Backend (Default)
+
+The Codex backend uses OpenAI's [App Server mode](https://developers.openai.com/codex/app-server/)
+and is the default backend:
+
+```yaml
+agent:
+  backend: codex  # optional, this is the default
+  max_concurrent_agents: 10
+  max_turns: 20
+codex:
+  command: codex app-server
+  approval_policy: never
+```
+
+See the [Codex documentation](https://developers.openai.com/codex/app-server/) for available options.
+
+### Claude Backend
+
+The Claude backend uses Anthropic's Claude CLI with the `--print` mode for structured output:
+
+```yaml
+agent:
+  backend: claude
+  max_concurrent_agents: 10
+  max_turns: 20
+claude:
+  command: claude
+  turn_timeout_ms: 180000
+  read_timeout_ms: 300000
+```
+
+#### Claude CLI Requirements
+
+- The `claude` command must be available in PATH
+- Requires Claude CLI version 1.0 or higher (see [docs/claude_cli_compat.md](docs/claude_cli_compat.md) for validated versions)
+- Requires `--print` mode support (available in CLI version 1.0+)
+- For Linear integration, configure the Linear MCP server (see below)
+
+#### Linear MCP for Claude Backend
+
+When using the Claude backend, you must configure the Linear MCP server to enable Linear operations:
+
+```yaml
+claude:
+  command: claude
+  mcp_config_path: /path/to/mcp-config.json  # optional, required for Linear MCP
+```
+
+The MCP config file should contain the Linear MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-linear"]
+    }
+  }
+}
+```
+
+**Failure mode**: If Linear MCP is not configured, the Claude backend will start but Linear operations
+will not be available. The agent will need to handle Linear operations through alternative methods or
+will report missing capability errors.
+
+See [docs/claude_cli_compat.md](docs/claude_cli_compat.md) for detailed compatibility information.
+
 ## Web dashboard
 
 The observability UI now runs on a minimal Phoenix stack:
