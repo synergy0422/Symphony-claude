@@ -35,12 +35,137 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
     end
   end
 
+  # ============================================================================
+  # MCP Config Validation and Generation
+  # ============================================================================
+
+  @doc """
+  Validates the MCP config path if provided.
+
+  Returns :ok if path is nil (no config) or if the file is readable.
+  Returns {:error, reason} if the file exists but is not readable.
+  """
+  @spec validate_mcp_config_path(String.t() | nil) :: :ok | {:error, term()}
+  def validate_mcp_config_path(nil), do: :ok
+
+  def validate_mcp_config_path(path) when is_binary(path) do
+    case File.read(path) do
+      {:ok, _content} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, {:mcp_config_unreadable, path, reason}}
+    end
+  end
+
+  @doc """
+  Generates an MCP config file if no explicit path is provided.
+
+  Returns {:ok, generated_path} if a file was generated, or :noop if generation is not needed.
+  """
+  @spec generate_mcp_config(String.t() | nil) :: {:ok, String.t()} | :noop | {:error, term()}
+  def generate_mcp_config(nil) do
+    # Generate a temporary MCP config file
+    # This would typically include Linear MCP server config based on environment
+    generate_mcp_config_file()
+  end
+
+  def generate_mcp_config(_explicit_path), do: :noop
+
+  defp generate_mcp_config_file do
+    # Create temp directory for MCP config
+    tmp_dir = Path.join(System.get_env("TMPDIR", "/tmp"), "symphony_mcp")
+
+    case File.mkdir_p(tmp_dir) do
+      :ok ->
+        # Generate unique config file path
+        session_id = generate_session_id()
+        config_path = Path.join(tmp_dir, "mcp_config_#{session_id}.json")
+
+        # Basic MCP config structure (can be extended with Linear MCP settings)
+        mcp_config = %{
+          "mcpServers" => %{}
+        }
+
+        case Jason.encode_to_iodata(mcp_config) do
+          {:ok, json} ->
+            case File.write(config_path, json) do
+              :ok ->
+                Logger.debug("Generated MCP config at: #{config_path}")
+                {:ok, config_path}
+
+              {:error, reason} ->
+                {:error, {:mcp_config_write_failed, config_path, reason}}
+            end
+
+          {:error, reason} ->
+            {:error, {:mcp_config_encode_failed, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:mcp_tmp_dir_failed, tmp_dir, reason}}
+    end
+  end
+
+  @doc """
+  Cleans up generated MCP config file if it was generated (not user-provided).
+
+  Returns :ok always, as the file may or may not exist.
+  """
+  @spec cleanup_mcp_config(String.t() | nil, boolean()) :: :ok
+  def cleanup_mcp_config(_path, false), do: :ok
+
+  def cleanup_mcp_config(nil, _generated), do: :ok
+
+  def cleanup_mcp_config(path, true) do
+    case File.rm(path) do
+      :ok ->
+        Logger.debug("Cleaned up generated MCP config: #{path}")
+        :ok
+
+      {:error, :enoent} ->
+        # File doesn't exist, that's fine
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to cleanup MCP config #{path}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
   defp start_session_internal(workspace) do
+    # Get MCP config path from config
+    explicit_mcp_config_path = SymphonyElixir.Config.claude_mcp_config_path()
+
+    # Validate explicit MCP config path if provided
+    case validate_mcp_config_path(explicit_mcp_config_path) do
+      :ok ->
+        # Either use explicit path or generate one
+        {mcp_config_path, mcp_config_generated} =
+          case generate_mcp_config(explicit_mcp_config_path) do
+            {:ok, generated_path} -> {generated_path, true}
+            :noop -> {explicit_mcp_config_path, false}
+            {:error, reason} -> {:error, reason}
+          end
+
+        # Check if we have an error from above
+        if is_binary(mcp_config_path) or mcp_config_path == nil do
+          do_start_session(workspace, mcp_config_path, mcp_config_generated)
+        else
+          {:error, mcp_config_path}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_start_session(workspace, mcp_config_path, mcp_config_generated) do
     # Generate a unique session ID
     session_id = generate_session_id()
 
     # Build CLI arguments
-    cli_args = build_cli_args(workspace)
+    cli_args = build_cli_args(workspace, mcp_config_path)
 
     # Open a Port to communicate with Claude CLI
     port =
@@ -59,7 +184,11 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
       thread_id: session_id,
       workspace: workspace,
       port: port,
-      metadata: %{started_at: DateTime.utc_now()}
+      metadata: %{
+        started_at: DateTime.utc_now(),
+        mcp_config_path: mcp_config_path,
+        mcp_config_generated: mcp_config_generated
+      }
     }
 
     # Register session
@@ -121,6 +250,11 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
       Process.sleep(100)
       Port.close(port)
     end
+
+    # Clean up generated MCP config file if applicable
+    mcp_config_path = Map.get(session_handle, :mcp_config_path)
+    mcp_config_generated = Map.get(session_handle, :metadata, %{}) |> Map.get(:mcp_config_generated, false)
+    cleanup_mcp_config(mcp_config_path, mcp_config_generated)
 
     # Unregister session
     SessionIndex.unregister(session_handle)
@@ -187,14 +321,14 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
   # CLI Arguments
   # ============================================================================
 
-  defp build_cli_args(workspace) do
+  defp build_cli_args(workspace, mcp_config_path) do
     args = [
       "--print",
       "--no-ansi"
     ]
 
-    # Add MCP config path if configured
-    case SymphonyElixir.Config.claude_mcp_config_path() do
+    # Add MCP config path if provided (either explicit or generated)
+    case mcp_config_path do
       nil ->
         args
 
