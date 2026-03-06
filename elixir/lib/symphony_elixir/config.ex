@@ -40,6 +40,10 @@ defmodule SymphonyElixir.Config do
     }
   }
   @default_codex_thread_sandbox "workspace-write"
+  @default_claude_command "claude"
+  @default_claude_version_range ">=1.0.0"
+  @default_diff_max_bytes 50_000
+  @default_diff_max_lines 2000
   @default_observability_enabled true
   @default_observability_refresh_ms 1_000
   @default_observability_render_interval_ms 16
@@ -82,6 +86,10 @@ defmodule SymphonyElixir.Config do
                                type: :map,
                                default: %{},
                                keys: [
+                                 backend: [
+                                   type: {:or, [:atom, :string]},
+                                   default: :codex
+                                 ],
                                  max_concurrent_agents: [
                                    type: :integer,
                                    default: @default_max_concurrent_agents
@@ -117,6 +125,18 @@ defmodule SymphonyElixir.Config do
                                    type: :integer,
                                    default: @default_codex_stall_timeout_ms
                                  ]
+                               ]
+                             ],
+                             claude: [
+                               type: :map,
+                               default: %{},
+                               keys: [
+                                 command: [type: :string, default: @default_claude_command],
+                                 version_range: [type: :string, default: @default_claude_version_range],
+                                 mcp_config_path: [type: {:or, [:string, nil]}, default: nil],
+                                 print_mode: [type: :boolean, default: true],
+                                 diff_max_bytes: [type: :pos_integer, default: @default_diff_max_bytes],
+                                 diff_max_lines: [type: :pos_integer, default: @default_diff_max_lines]
                                ]
                              ],
                              hooks: [
@@ -264,6 +284,11 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:agent, :max_turns])
   end
 
+  @spec agent_backend() :: atom()
+  def agent_backend do
+    get_in(validated_workflow_options(), [:agent, :backend]) || :codex
+  end
+
   @spec max_concurrent_agents_for_state(term()) :: pos_integer()
   def max_concurrent_agents_for_state(state_name) when is_binary(state_name) do
     state_limits = get_in(validated_workflow_options(), [:agent, :max_concurrent_agents_by_state])
@@ -317,6 +342,36 @@ defmodule SymphonyElixir.Config do
     validated_workflow_options()
     |> get_in([:codex, :stall_timeout_ms])
     |> max(0)
+  end
+
+  @spec claude_command() :: String.t()
+  def claude_command do
+    get_in(validated_workflow_options(), [:claude, :command])
+  end
+
+  @spec claude_version_range() :: String.t()
+  def claude_version_range do
+    get_in(validated_workflow_options(), [:claude, :version_range])
+  end
+
+  @spec claude_mcp_config_path() :: String.t() | nil
+  def claude_mcp_config_path do
+    get_in(validated_workflow_options(), [:claude, :mcp_config_path])
+  end
+
+  @spec claude_print_mode?() :: boolean()
+  def claude_print_mode? do
+    get_in(validated_workflow_options(), [:claude, :print_mode])
+  end
+
+  @spec claude_diff_max_bytes() :: pos_integer()
+  def claude_diff_max_bytes do
+    get_in(validated_workflow_options(), [:claude, :diff_max_bytes])
+  end
+
+  @spec claude_diff_max_lines() :: pos_integer()
+  def claude_diff_max_lines do
+    get_in(validated_workflow_options(), [:claude, :diff_max_lines])
   end
 
   @spec workflow_prompt() :: String.t()
@@ -451,6 +506,7 @@ defmodule SymphonyElixir.Config do
       workspace: extract_workspace_options(section_map(config, "workspace")),
       agent: extract_agent_options(section_map(config, "agent")),
       codex: extract_codex_options(section_map(config, "codex")),
+      claude: extract_claude_options(section_map(config, "claude")),
       hooks: extract_hooks_options(section_map(config, "hooks")),
       observability: extract_observability_options(section_map(config, "observability")),
       server: extract_server_options(section_map(config, "server"))
@@ -479,6 +535,7 @@ defmodule SymphonyElixir.Config do
 
   defp extract_agent_options(section) do
     %{}
+    |> put_if_present(:backend, backend_value(Map.get(section, "backend")))
     |> put_if_present(:max_concurrent_agents, integer_value(Map.get(section, "max_concurrent_agents")))
     |> put_if_present(:max_turns, positive_integer_value(Map.get(section, "max_turns")))
     |> put_if_present(:max_retry_backoff_ms, positive_integer_value(Map.get(section, "max_retry_backoff_ms")))
@@ -494,6 +551,16 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:turn_timeout_ms, integer_value(Map.get(section, "turn_timeout_ms")))
     |> put_if_present(:read_timeout_ms, integer_value(Map.get(section, "read_timeout_ms")))
     |> put_if_present(:stall_timeout_ms, integer_value(Map.get(section, "stall_timeout_ms")))
+  end
+
+  defp extract_claude_options(section) do
+    %{}
+    |> put_if_present(:command, command_value(Map.get(section, "command")))
+    |> put_if_present(:version_range, scalar_string_value(Map.get(section, "version_range")))
+    |> put_if_present(:mcp_config_path, binary_value(Map.get(section, "mcp_config_path")))
+    |> put_if_present(:print_mode, boolean_value(Map.get(section, "print_mode")))
+    |> put_if_present(:diff_max_bytes, positive_integer_value(Map.get(section, "diff_max_bytes")))
+    |> put_if_present(:diff_max_lines, positive_integer_value(Map.get(section, "diff_max_lines")))
   end
 
   defp extract_hooks_options(section) do
@@ -558,6 +625,17 @@ defmodule SymphonyElixir.Config do
   end
 
   defp command_value(_value), do: :omit
+
+  defp backend_value(nil), do: :omit
+  defp backend_value(value) when is_atom(value), do: value
+
+  defp backend_value(value) when is_binary(value) do
+    case String.trim(value) |> String.downcase() do
+      "codex" -> :codex
+      "claude" -> :claude
+      _ -> :omit
+    end
+  end
 
   defp hook_command_value(value) when is_binary(value) do
     case String.trim(value) do
