@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Agent.CodexBackend do
 
   require Logger
 
+  alias SymphonyElixir.Agent.SessionIndex
   alias SymphonyElixir.Codex.AppServer
 
   @behaviour SymphonyElixir.Agent.Backend
@@ -26,7 +27,8 @@ defmodule SymphonyElixir.Agent.CodexBackend do
     case AppServer.start_session(workspace) do
       {:ok, app_session} ->
         session_handle = to_session_handle(app_session)
-        Logger.info("CodexBackend started session: #{inspect(session_handle)}")
+        SessionIndex.register(session_handle)
+        Logger.info("CodexBackend started session: #{inspect(session_handle.session_id)}")
         {:ok, session_handle}
 
       {:error, reason} ->
@@ -60,6 +62,7 @@ defmodule SymphonyElixir.Agent.CodexBackend do
   @spec stop_session(session :: session_handle()) :: :ok
   def stop_session(session_handle) when is_map(session_handle) do
     app_session = to_app_session(session_handle)
+    SessionIndex.unregister(session_handle)
     AppServer.stop_session(app_session)
     Logger.info("CodexBackend stopped session: #{inspect(session_handle.session_id)}")
     :ok
@@ -68,9 +71,7 @@ defmodule SymphonyElixir.Agent.CodexBackend do
   @impl SymphonyElixir.Agent.Backend
   @spec list_sessions() :: [session_handle()]
   def list_sessions do
-    # SessionIndex will be added in US-002
-    # For now, return empty list as this is the initial implementation
-    []
+    SessionIndex.list_sessions(:codex)
   end
 
   # ============================================================================
