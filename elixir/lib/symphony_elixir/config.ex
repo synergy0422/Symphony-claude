@@ -44,7 +44,13 @@ defmodule SymphonyElixir.Config do
   @default_observability_refresh_ms 1_000
   @default_observability_render_interval_ms 16
   @default_server_host "127.0.0.1"
+  @default_claude_command "claude"
+  @supported_schema_versions [1]
   @workflow_options_schema NimbleOptions.new!(
+                             schema_version: [
+                               type: {:or, [:integer, nil]},
+                               default: nil
+                             ],
                              tracker: [
                                type: :map,
                                default: %{},
@@ -82,6 +88,10 @@ defmodule SymphonyElixir.Config do
                                type: :map,
                                default: %{},
                                keys: [
+                                 backend: [
+                                   type: {:or, [:string, nil]},
+                                   default: "codex"
+                                 ],
                                  max_concurrent_agents: [
                                    type: :integer,
                                    default: @default_max_concurrent_agents
@@ -116,6 +126,21 @@ defmodule SymphonyElixir.Config do
                                  stall_timeout_ms: [
                                    type: :integer,
                                    default: @default_codex_stall_timeout_ms
+                                 ]
+                               ]
+                             ],
+                             claude: [
+                               type: :map,
+                               default: %{},
+                               keys: [
+                                 command: [type: :string, default: @default_claude_command],
+                                 turn_timeout_ms: [
+                                   type: :integer,
+                                   default: @default_codex_turn_timeout_ms
+                                 ],
+                                 read_timeout_ms: [
+                                   type: :integer,
+                                   default: @default_codex_read_timeout_ms
                                  ]
                                ]
                              ],
@@ -264,6 +289,16 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:agent, :max_turns])
   end
 
+  @spec agent_backend() :: String.t()
+  def agent_backend do
+    get_in(validated_workflow_options(), [:agent, :backend]) || "codex"
+  end
+
+  @spec schema_version() :: pos_integer() | nil
+  def schema_version do
+    get_in(validated_workflow_options(), [:schema_version])
+  end
+
   @spec max_concurrent_agents_for_state(term()) :: pos_integer()
   def max_concurrent_agents_for_state(state_name) when is_binary(state_name) do
     state_limits = get_in(validated_workflow_options(), [:agent, :max_concurrent_agents_by_state])
@@ -319,6 +354,21 @@ defmodule SymphonyElixir.Config do
     |> max(0)
   end
 
+  @spec claude_command() :: String.t()
+  def claude_command do
+    get_in(validated_workflow_options(), [:claude, :command]) || @default_claude_command
+  end
+
+  @spec claude_turn_timeout_ms() :: pos_integer()
+  def claude_turn_timeout_ms do
+    get_in(validated_workflow_options(), [:claude, :turn_timeout_ms]) || @default_codex_turn_timeout_ms
+  end
+
+  @spec claude_read_timeout_ms() :: pos_integer()
+  def claude_read_timeout_ms do
+    get_in(validated_workflow_options(), [:claude, :read_timeout_ms]) || @default_codex_read_timeout_ms
+  end
+
   @spec workflow_prompt() :: String.t()
   def workflow_prompt do
     case current_workflow() do
@@ -364,6 +414,7 @@ defmodule SymphonyElixir.Config do
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
     with {:ok, _workflow} <- current_workflow(),
+         :ok <- require_valid_schema_version(),
          :ok <- require_tracker_kind(),
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
@@ -383,6 +434,20 @@ defmodule SymphonyElixir.Config do
          thread_sandbox: thread_sandbox,
          turn_sandbox_policy: turn_sandbox_policy
        }}
+    end
+  end
+
+  defp require_valid_schema_version do
+    case schema_version() do
+      nil ->
+        # Backward-compatible: no schema version means use default behavior
+        :ok
+
+      version when version in @supported_schema_versions ->
+        :ok
+
+      version ->
+        {:error, {:unsupported_schema_version, version, supported: @supported_schema_versions}}
     end
   end
 
@@ -446,15 +511,24 @@ defmodule SymphonyElixir.Config do
 
   defp extract_workflow_options(config) do
     %{
+      schema_version: extract_schema_version(section_map(config, "schema_version")),
       tracker: extract_tracker_options(section_map(config, "tracker")),
       polling: extract_polling_options(section_map(config, "polling")),
       workspace: extract_workspace_options(section_map(config, "workspace")),
       agent: extract_agent_options(section_map(config, "agent")),
       codex: extract_codex_options(section_map(config, "codex")),
+      claude: extract_claude_options(section_map(config, "claude")),
       hooks: extract_hooks_options(section_map(config, "hooks")),
       observability: extract_observability_options(section_map(config, "observability")),
       server: extract_server_options(section_map(config, "server"))
     }
+  end
+
+  defp extract_schema_version(section) do
+    case integer_value(Map.get(section, "schema_version")) do
+      :omit -> nil
+      value -> value
+    end
   end
 
   defp extract_tracker_options(section) do
@@ -494,6 +568,13 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:turn_timeout_ms, integer_value(Map.get(section, "turn_timeout_ms")))
     |> put_if_present(:read_timeout_ms, integer_value(Map.get(section, "read_timeout_ms")))
     |> put_if_present(:stall_timeout_ms, integer_value(Map.get(section, "stall_timeout_ms")))
+  end
+
+  defp extract_claude_options(section) do
+    %{}
+    |> put_if_present(:command, command_value(Map.get(section, "command")))
+    |> put_if_present(:turn_timeout_ms, integer_value(Map.get(section, "turn_timeout_ms")))
+    |> put_if_present(:read_timeout_ms, integer_value(Map.get(section, "read_timeout_ms")))
   end
 
   defp extract_hooks_options(section) do
