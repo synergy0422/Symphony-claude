@@ -92,6 +92,7 @@ defmodule SymphonyElixir.TestSupport do
     config =
       Keyword.merge(
         [
+          schema_version: nil,
           tracker_kind: "linear",
           tracker_endpoint: "https://api.linear.app/graphql",
           tracker_api_token: "token",
@@ -101,11 +102,11 @@ defmodule SymphonyElixir.TestSupport do
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
+          agent_backend: "codex",
           max_concurrent_agents: 10,
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
-          agent_backend: "codex",
           codex_command: "codex app-server",
           codex_approval_policy: %{reject: %{sandbox_approval: true, rules: true, mcp_elicitations: true}},
           codex_thread_sandbox: "workspace-write",
@@ -116,6 +117,8 @@ defmodule SymphonyElixir.TestSupport do
           claude_command: "claude",
           claude_version_range: ">=1.0.0",
           claude_mcp_config_path: nil,
+          claude_turn_timeout_ms: nil,
+          claude_read_timeout_ms: nil,
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -140,11 +143,12 @@ defmodule SymphonyElixir.TestSupport do
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
+    schema_version = Keyword.get(config, :schema_version)
+    agent_backend = Keyword.get(config, :agent_backend)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
-    agent_backend = Keyword.get(config, :agent_backend)
     codex_command = Keyword.get(config, :codex_command)
     codex_approval_policy = Keyword.get(config, :codex_approval_policy)
     codex_thread_sandbox = Keyword.get(config, :codex_thread_sandbox)
@@ -155,6 +159,8 @@ defmodule SymphonyElixir.TestSupport do
     claude_command = Keyword.get(config, :claude_command)
     claude_version_range = Keyword.get(config, :claude_version_range)
     claude_mcp_config_path = Keyword.get(config, :claude_mcp_config_path)
+    claude_turn_timeout_ms = Keyword.get(config, :claude_turn_timeout_ms)
+    claude_read_timeout_ms = Keyword.get(config, :claude_read_timeout_ms)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
     hook_after_run = Keyword.get(config, :hook_after_run)
@@ -170,6 +176,7 @@ defmodule SymphonyElixir.TestSupport do
     sections =
       [
         "---",
+        schema_version_yaml(schema_version),
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
         "  endpoint: #{yaml_value(tracker_endpoint)}",
@@ -196,10 +203,13 @@ defmodule SymphonyElixir.TestSupport do
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
-        "claude:",
-        "  command: #{yaml_value(claude_command)}",
-        "  version_range: #{yaml_value(claude_version_range)}",
-        "  mcp_config_path: #{yaml_value(claude_mcp_config_path)}",
+        claude_yaml(
+          claude_command,
+          claude_version_range,
+          claude_mcp_config_path,
+          claude_turn_timeout_ms,
+          claude_read_timeout_ms
+        ),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
@@ -232,6 +242,25 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value), do: yaml_value(to_string(value))
+
+  defp schema_version_yaml(nil), do: nil
+  defp schema_version_yaml(value), do: "schema_version: #{yaml_value(value)}"
+
+  defp claude_yaml(command, version_range, mcp_config_path, turn_timeout_ms, read_timeout_ms) do
+    if Enum.all?([command, version_range, mcp_config_path, turn_timeout_ms, read_timeout_ms], &is_nil/1) do
+      nil
+    else
+      [
+        "claude:",
+        "  command: #{yaml_value(command)}",
+        "  version_range: #{yaml_value(version_range)}",
+        "  mcp_config_path: #{yaml_value(mcp_config_path)}",
+        "  turn_timeout_ms: #{yaml_value(turn_timeout_ms)}",
+        "  read_timeout_ms: #{yaml_value(read_timeout_ms)}"
+      ]
+      |> Enum.join("\n")
+    end
+  end
 
   defp hooks_yaml(nil, nil, nil, nil, timeout_ms), do: "hooks:\n  timeout_ms: #{yaml_value(timeout_ms)}"
 

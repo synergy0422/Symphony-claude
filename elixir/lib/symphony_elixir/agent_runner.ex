@@ -1,42 +1,44 @@
 defmodule SymphonyElixir.AgentRunner do
   @moduledoc """
-  Executes a single Linear issue in an isolated workspace with a backend (Codex or Claude).
+  Executes a single Linear issue in an isolated workspace with a backend.
 
-  This module routes through the configured backend and monitors the backend process
-  for crashes, treating process DOWN as a backend_crashed error.
+  This module routes through the configured backend and monitors internal
+  backend processes for crashes, treating `:DOWN` as a backend error.
   """
 
   require Logger
 
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
-  # Backend module lookup
   @backend_modules %{
     :codex => SymphonyElixir.Agent.CodexBackend,
     :claude => SymphonyElixir.Agent.ClaudeBackend
   }
 
-  # ============================================================================
-  # Public API
-  # ============================================================================
-
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, update_recipient \\ nil, opts \\ []) do
     Logger.info("Starting agent run for #{issue_context(issue)}")
 
-    case Workspace.create_for_issue(issue) do
-      {:ok, workspace} ->
-        try do
-          with :ok <- Workspace.run_before_run_hook(workspace, issue),
-               :ok <- run_backend_turns(workspace, issue, update_recipient, opts) do
-            :ok
-          else
-            {:error, reason} ->
-              Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
-              raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
-          end
-        after
-          Workspace.run_after_run_hook(workspace, issue)
+    case resolve_backend_module(opts) do
+      {:ok, backend_module} ->
+        case Workspace.create_for_issue(issue) do
+          {:ok, workspace} ->
+            try do
+              with :ok <- Workspace.run_before_run_hook(workspace, issue),
+                   :ok <- run_backend_turns(backend_module, workspace, issue, update_recipient, opts) do
+                :ok
+              else
+                {:error, reason} ->
+                  Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
+                  raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
+              end
+            after
+              Workspace.run_after_run_hook(workspace, issue)
+            end
+
+          {:error, reason} ->
+            Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
+            raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
         end
 
       {:error, reason} ->
@@ -45,21 +47,29 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # ============================================================================
-  # Private Functions
-  # ============================================================================
+  defp resolve_backend_module(opts) do
+    case Keyword.get(opts, :backend_module) do
+      nil ->
+        configured_backend_module()
 
-  defp run_backend_turns(workspace, issue, update_recipient, opts) do
+      backend_module when is_atom(backend_module) ->
+        {:ok, backend_module}
+
+      other ->
+        {:error, {:invalid_backend_module, other}}
+    end
+  end
+
+  defp configured_backend_module do
+    Config.agent_backend()
+    |> backend_module()
+  end
+
+  defp run_backend_turns(backend_module, workspace, issue, update_recipient, opts) do
     max_turns = Keyword.get(opts, :max_turns, Config.agent_max_turns())
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
-    # Select backend module based on configuration
-    backend = Config.agent_backend()
-    backend_module = backend_module(backend)
-
     with {:ok, session_handle} <- backend_module.start_session(workspace) do
-      # Try to monitor the backend process if it's a PID (internal process)
-      # For external processes (Ports), we rely on the backend to signal errors
       monitor_ref = maybe_monitor_backend(session_handle)
 
       try do
@@ -76,7 +86,6 @@ defmodule SymphonyElixir.AgentRunner do
           max_turns
         )
       after
-        # Demonitor on terminal events if we have a monitor reference
         maybe_demonitor(monitor_ref)
         backend_module.stop_session(session_handle)
       end
@@ -100,19 +109,25 @@ defmodule SymphonyElixir.AgentRunner do
     Process.demonitor(monitor_ref, [:flush])
   end
 
-  defp do_run_backend_turns(backend_module, session_handle, monitor_ref, workspace, issue, update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+  defp do_run_backend_turns(
+         backend_module,
+         session_handle,
+         monitor_ref,
+         workspace,
+         issue,
+         update_recipient,
+         opts,
+         issue_state_fetcher,
+         turn_number,
+         max_turns
+       ) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
-
-    # Build message handler
     message_handler = build_message_handler(update_recipient, issue)
-
-    # Run the turn with monitoring
     turn_result = backend_module.run_turn(session_handle, prompt, issue, Keyword.put(opts, :on_message, message_handler))
 
-    # Check for DOWN messages after the call
     case turn_result do
-      {:ok, _turn_session} ->
-        Logger.info("Completed agent run for #{issue_context(issue)} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
+      {:ok, turn_session} ->
+        Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
         case continue_with_issue?(issue, issue_state_fetcher) do
           {:continue, refreshed_issue} when turn_number < max_turns ->
@@ -143,7 +158,6 @@ defmodule SymphonyElixir.AgentRunner do
         end
 
       {:error, reason} ->
-        # Check if backend crashed (process died)
         case check_backend_down(monitor_ref) do
           {:backend_crashed, crash_reason} ->
             Logger.error("Backend crashed for #{issue_context(issue)}: #{inspect(crash_reason)}")
@@ -155,11 +169,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # Check for any pending DOWN messages
-  defp check_backend_down(nil) do
-    # No monitor reference - cannot check for DOWN messages
-    :ok
-  end
+  defp check_backend_down(nil), do: :ok
 
   defp check_backend_down(monitor_ref) do
     receive do
@@ -184,19 +194,25 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_update(_recipient, _issue, _message), do: :ok
 
+  defp backend_module(backend) when is_binary(backend) do
+    backend
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "codex" -> backend_module(:codex)
+      "claude" -> backend_module(:claude)
+      other -> {:error, {:unsupported_agent_backend, other}}
+    end
+  end
+
   defp backend_module(backend) when is_atom(backend) do
     case Map.fetch(@backend_modules, backend) do
-      {:ok, module} -> module
-      :error -> raise "Backend module not available: #{inspect(backend)}. Available: #{inspect(Map.keys(@backend_modules))}"
+      {:ok, module} -> {:ok, module}
+      :error -> {:error, {:unsupported_agent_backend, inspect(backend)}}
     end
   end
 
   defp get_backend_pid(session_handle) do
-    # The port field contains either:
-    # - A PID for internal backend processes
-    # - A Port for external backend processes (like Codex CLI)
-    # We can only monitor PIDs directly; for Ports, we rely on the
-    # backend to signal errors through return values.
     port = Map.fetch!(session_handle, :port)
 
     if is_pid(port) do

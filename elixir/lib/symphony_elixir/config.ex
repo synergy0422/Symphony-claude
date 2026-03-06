@@ -40,7 +40,6 @@ defmodule SymphonyElixir.Config do
     }
   }
   @default_codex_thread_sandbox "workspace-write"
-  @default_claude_command "claude"
   @default_claude_version_range ">=1.0.0"
   @default_diff_max_bytes 50_000
   @default_diff_max_lines 2000
@@ -48,7 +47,14 @@ defmodule SymphonyElixir.Config do
   @default_observability_refresh_ms 1_000
   @default_observability_render_interval_ms 16
   @default_server_host "127.0.0.1"
+  @default_claude_command "claude"
+  @supported_schema_versions [1]
+  @supported_agent_backends ["codex", "claude"]
   @workflow_options_schema NimbleOptions.new!(
+                             schema_version: [
+                               type: {:or, [:integer, nil]},
+                               default: nil
+                             ],
                              tracker: [
                                type: :map,
                                default: %{},
@@ -87,8 +93,8 @@ defmodule SymphonyElixir.Config do
                                default: %{},
                                keys: [
                                  backend: [
-                                   type: {:or, [:atom, :string]},
-                                   default: :codex
+                                   type: {:or, [:string, nil]},
+                                   default: "codex"
                                  ],
                                  max_concurrent_agents: [
                                    type: :integer,
@@ -136,7 +142,15 @@ defmodule SymphonyElixir.Config do
                                  mcp_config_path: [type: {:or, [:string, nil]}, default: nil],
                                  print_mode: [type: :boolean, default: true],
                                  diff_max_bytes: [type: :pos_integer, default: @default_diff_max_bytes],
-                                 diff_max_lines: [type: :pos_integer, default: @default_diff_max_lines]
+                                 diff_max_lines: [type: :pos_integer, default: @default_diff_max_lines],
+                                 turn_timeout_ms: [
+                                   type: :integer,
+                                   default: @default_codex_turn_timeout_ms
+                                 ],
+                                 read_timeout_ms: [
+                                   type: :integer,
+                                   default: @default_codex_read_timeout_ms
+                                 ]
                                ]
                              ],
                              hooks: [
@@ -284,9 +298,14 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:agent, :max_turns])
   end
 
-  @spec agent_backend() :: atom()
+  @spec agent_backend() :: String.t()
   def agent_backend do
-    get_in(validated_workflow_options(), [:agent, :backend]) || :codex
+    get_in(validated_workflow_options(), [:agent, :backend]) || "codex"
+  end
+
+  @spec schema_version() :: pos_integer() | nil
+  def schema_version do
+    get_in(validated_workflow_options(), [:schema_version])
   end
 
   @spec max_concurrent_agents_for_state(term()) :: pos_integer()
@@ -347,6 +366,16 @@ defmodule SymphonyElixir.Config do
   @spec claude_command() :: String.t()
   def claude_command do
     get_in(validated_workflow_options(), [:claude, :command])
+  end
+
+  @spec claude_turn_timeout_ms() :: pos_integer()
+  def claude_turn_timeout_ms do
+    get_in(validated_workflow_options(), [:claude, :turn_timeout_ms]) || @default_codex_turn_timeout_ms
+  end
+
+  @spec claude_read_timeout_ms() :: pos_integer()
+  def claude_read_timeout_ms do
+    get_in(validated_workflow_options(), [:claude, :read_timeout_ms]) || @default_codex_read_timeout_ms
   end
 
   @spec claude_version_range() :: String.t()
@@ -419,11 +448,13 @@ defmodule SymphonyElixir.Config do
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
     with {:ok, _workflow} <- current_workflow(),
+         :ok <- require_valid_schema_version(),
+         :ok <- require_valid_agent_backend(),
          :ok <- require_tracker_kind(),
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
-         :ok <- require_valid_codex_runtime_settings() do
-      require_codex_command()
+         :ok <- require_valid_backend_runtime_settings() do
+      require_backend_command()
     end
   end
 
@@ -438,6 +469,33 @@ defmodule SymphonyElixir.Config do
          thread_sandbox: thread_sandbox,
          turn_sandbox_policy: turn_sandbox_policy
        }}
+    end
+  end
+
+  defp require_valid_schema_version do
+    case schema_version() do
+      nil ->
+        # Backward-compatible: no schema version means use default behavior
+        :ok
+
+      version when version in @supported_schema_versions ->
+        :ok
+
+      version ->
+        {:error, {:unsupported_schema_version, version, supported: @supported_schema_versions}}
+    end
+  end
+
+  defp require_valid_agent_backend do
+    case agent_backend() do
+      backend when backend in @supported_agent_backends ->
+        :ok
+
+      backend when is_binary(backend) ->
+        {:error, {:unsupported_agent_backend, backend, supported: @supported_agent_backends}}
+
+      backend ->
+        {:error, {:unsupported_agent_backend, inspect(backend), supported: @supported_agent_backends}}
     end
   end
 
@@ -478,18 +536,37 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp require_codex_command do
-    if byte_size(String.trim(codex_command())) > 0 do
-      :ok
-    else
-      {:error, :missing_codex_command}
+  defp require_backend_command do
+    case agent_backend() do
+      "claude" ->
+        if byte_size(String.trim(claude_command())) > 0 do
+          :ok
+        else
+          {:error, :missing_claude_command}
+        end
+
+      _ ->
+        if byte_size(String.trim(codex_command())) > 0 do
+          :ok
+        else
+          {:error, :missing_codex_command}
+        end
     end
   end
 
-  defp require_valid_codex_runtime_settings do
-    case codex_runtime_settings() do
-      {:ok, _settings} -> :ok
-      {:error, reason} -> {:error, reason}
+  defp require_valid_backend_runtime_settings do
+    case agent_backend() do
+      "claude" ->
+        case Version.parse_requirement(claude_version_range()) do
+          {:ok, _requirement} -> :ok
+          :error -> {:error, {:invalid_claude_version_range, claude_version_range()}}
+        end
+
+      _ ->
+        case codex_runtime_settings() do
+          {:ok, _settings} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
@@ -501,6 +578,7 @@ defmodule SymphonyElixir.Config do
 
   defp extract_workflow_options(config) do
     %{
+      schema_version: extract_schema_version(Map.get(config, "schema_version")),
       tracker: extract_tracker_options(section_map(config, "tracker")),
       polling: extract_polling_options(section_map(config, "polling")),
       workspace: extract_workspace_options(section_map(config, "workspace")),
@@ -511,6 +589,13 @@ defmodule SymphonyElixir.Config do
       observability: extract_observability_options(section_map(config, "observability")),
       server: extract_server_options(section_map(config, "server"))
     }
+  end
+
+  defp extract_schema_version(value) do
+    case integer_value(value) do
+      :omit -> nil
+      value -> value
+    end
   end
 
   defp extract_tracker_options(section) do
@@ -535,7 +620,7 @@ defmodule SymphonyElixir.Config do
 
   defp extract_agent_options(section) do
     %{}
-    |> put_if_present(:backend, backend_value(Map.get(section, "backend")))
+    |> put_if_present(:backend, scalar_string_value(Map.get(section, "backend")))
     |> put_if_present(:max_concurrent_agents, integer_value(Map.get(section, "max_concurrent_agents")))
     |> put_if_present(:max_turns, positive_integer_value(Map.get(section, "max_turns")))
     |> put_if_present(:max_retry_backoff_ms, positive_integer_value(Map.get(section, "max_retry_backoff_ms")))
@@ -561,6 +646,8 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:print_mode, boolean_value(Map.get(section, "print_mode")))
     |> put_if_present(:diff_max_bytes, positive_integer_value(Map.get(section, "diff_max_bytes")))
     |> put_if_present(:diff_max_lines, positive_integer_value(Map.get(section, "diff_max_lines")))
+    |> put_if_present(:turn_timeout_ms, integer_value(Map.get(section, "turn_timeout_ms")))
+    |> put_if_present(:read_timeout_ms, integer_value(Map.get(section, "read_timeout_ms")))
   end
 
   defp extract_hooks_options(section) do
@@ -625,17 +712,6 @@ defmodule SymphonyElixir.Config do
   end
 
   defp command_value(_value), do: :omit
-
-  defp backend_value(nil), do: :omit
-  defp backend_value(value) when is_atom(value), do: value
-
-  defp backend_value(value) when is_binary(value) do
-    case String.trim(value) |> String.downcase() do
-      "codex" -> :codex
-      "claude" -> :claude
-      _ -> :omit
-    end
-  end
 
   defp hook_command_value(value) when is_binary(value) do
     case String.trim(value) do

@@ -148,6 +148,51 @@ codex:
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
 
+## Backend Configuration
+
+This branch exposes backend-related workflow settings, but the runtime execution path is still
+Codex-only. `agent.backend` is parsed and validated so unsupported selections fail clearly instead
+of being silently ignored.
+
+### Codex Backend (Default)
+
+The Codex backend uses OpenAI's [App Server mode](https://developers.openai.com/codex/app-server/)
+and is the default backend:
+
+```yaml
+agent:
+  backend: codex  # optional, this is the default
+  max_concurrent_agents: 10
+  max_turns: 20
+codex:
+  command: codex app-server
+  approval_policy: never
+```
+
+See the [Codex documentation](https://developers.openai.com/codex/app-server/) for available options.
+
+### Claude Configuration Groundwork
+
+Claude-specific settings are accepted in `WORKFLOW.md` so workflow files and docs can be prepared
+ahead of the runtime backend landing:
+
+```yaml
+agent:
+  backend: claude
+  max_concurrent_agents: 10
+  max_turns: 20
+claude:
+  command: claude
+  turn_timeout_ms: 180000
+  read_timeout_ms: 300000
+```
+
+Current limitation:
+
+- Setting `agent.backend: claude` is not executable in this branch and will fail validation/runtime.
+- The live orchestration path still uses the Codex backend.
+- [docs/claude_cli_compat.md](docs/claude_cli_compat.md) records rollout targets and prerequisites for the upcoming Claude backend instead of documenting a fully active integration.
+
 ## Web dashboard
 
 The observability UI now runs on a minimal Phoenix stack:
