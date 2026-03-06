@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Agent.ClaudeParser do
   require Logger
 
   @max_buffer_size 1_000_000
+  @truncation_marker "\n\n[... diff truncated]"
 
   @type event_type :: :message | :content_block_delta | :content_block_start | :content_block_stop | :error | :done | :ping
 
@@ -138,34 +139,120 @@ defmodule SymphonyElixir.Agent.ClaudeParser do
   end
 
   defp split_frames(data) do
-    frames = String.split(data, "\n", trim: true)
-    {:ok, frames, ""}
+    lines = String.split(data, "\n", trim: false)
+    {complete_frames, remaining} = extract_complete_frames(lines)
+    {:ok, complete_frames, remaining}
+  end
+
+  defp extract_complete_frames([]), do: {[], ""}
+  defp extract_complete_frames([""]), do: {[], ""}
+  defp extract_complete_frames(["\n"]), do: {[], ""}
+
+  defp extract_complete_frames(lines) do
+    {complete, remaining} =
+      Enum.reduce(lines, {[], []}, fn line, {complete, remaining} ->
+        trimmed = String.trim(line)
+
+        cond do
+          trimmed == "" and remaining != [] ->
+            # Empty line with accumulated content - check if it's valid
+            joined = Enum.join(remaining, "\n")
+
+            if match?({:ok, _}, Jason.decode(joined)) do
+              {complete ++ [joined], []}
+            else
+              {complete, remaining}
+            end
+
+          trimmed == "" ->
+            {complete, []}
+
+          match?({:ok, _}, Jason.decode(trimmed)) ->
+            {complete ++ remaining ++ [trimmed], []}
+
+          remaining == [] ->
+            {complete, [line]}
+
+          true ->
+            # Incomplete frame - accumulate
+            {complete, remaining ++ [line]}
+        end
+      end)
+
+    {complete, Enum.join(remaining, "\n")}
   end
 
   @spec to_turn_result([parsed_event()]) :: map()
   def to_turn_result(events) do
-    Enum.reduce(events, %{backend: :claude}, &accumulate_event/2)
+    to_turn_result(events, 50_000, 2000)
   end
 
-  defp accumulate_event(%{type: :error, error: error}, acc) do
+  @spec to_turn_result([parsed_event()], non_neg_integer(), pos_integer()) :: map()
+  def to_turn_result(events, max_bytes, max_lines) do
+    Enum.reduce(events, %{backend: :claude}, &accumulate_event(&1, &2, max_bytes, max_lines))
+  end
+
+  defp accumulate_event(%{type: :error, error: error}, acc, _max_bytes, _max_lines) do
     Map.put(acc, :error, error)
   end
 
-  defp accumulate_event(%{type: :content_block_delta, delta: delta}, acc) do
+  defp accumulate_event(%{type: :content_block_delta, delta: delta}, acc, max_bytes, max_lines) do
     current_content = Map.get(acc, :content, "")
     new_content = current_content <> Map.get(delta, "text", "")
-    Map.put(acc, :content, new_content)
+    bounded_content = bound_content(new_content, max_bytes, max_lines)
+
+    acc
+    |> Map.put(:content, bounded_content.content)
+    |> Map.put(:content_truncated, bounded_content.truncated)
   end
 
-  defp accumulate_event(%{type: :message_delta, delta: delta, usage: usage}, acc) do
+  defp accumulate_event(%{type: :message_delta, delta: delta, usage: usage}, acc, _max_bytes, _max_lines) do
     acc
     |> Map.put(:stop_reason, Map.get(delta, "stop_reason"))
     |> Map.put(:usage, usage)
   end
 
-  defp accumulate_event(%{type: :done}, acc) do
+  defp accumulate_event(%{type: :done}, acc, _max_bytes, _max_lines) do
     Map.put(acc, :completed, true)
   end
 
-  defp accumulate_event(_event, acc), do: acc
+  defp accumulate_event(_event, acc, _max_bytes, _max_lines), do: acc
+
+  defp bound_content(content, max_bytes, max_lines) do
+    truncated_bytes? = byte_size(content) > max_bytes
+    lines = String.split(content, "\n")
+    truncated_lines? = length(lines) > max_lines
+
+    # Truncation marker has "\n\n" which adds 2 lines
+    marker_lines = 2
+
+    cond do
+      truncated_bytes? and truncated_lines? ->
+        truncated =
+          content
+          |> String.slice(0, max_bytes - byte_size(@truncation_marker))
+          |> String.split("\n")
+          |> Enum.take(max_lines - marker_lines)
+          |> Enum.join("\n")
+
+        %{content: truncated <> @truncation_marker, truncated: true}
+
+      truncated_bytes? ->
+        truncated =
+          content
+          |> String.slice(0, max_bytes - byte_size(@truncation_marker))
+          |> String.split("\n")
+          |> Enum.take(max_lines - marker_lines)
+          |> Enum.join("\n")
+
+        %{content: truncated <> @truncation_marker, truncated: true}
+
+      truncated_lines? ->
+        truncated = Enum.take(lines, max_lines - marker_lines) |> Enum.join("\n")
+        %{content: truncated <> @truncation_marker, truncated: true}
+
+      true ->
+        %{content: content, truncated: false}
+    end
+  end
 end

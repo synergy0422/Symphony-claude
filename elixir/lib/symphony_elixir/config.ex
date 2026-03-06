@@ -42,6 +42,8 @@ defmodule SymphonyElixir.Config do
   @default_codex_thread_sandbox "workspace-write"
   @default_claude_command "claude"
   @default_claude_version_range ">=1.0.0"
+  @default_diff_max_bytes 50_000
+  @default_diff_max_lines 2000
   @default_observability_enabled true
   @default_observability_refresh_ms 1_000
   @default_observability_render_interval_ms 16
@@ -132,7 +134,9 @@ defmodule SymphonyElixir.Config do
                                  command: [type: :string, default: @default_claude_command],
                                  version_range: [type: :string, default: @default_claude_version_range],
                                  mcp_config_path: [type: {:or, [:string, nil]}, default: nil],
-                                 print_mode: [type: :boolean, default: true]
+                                 print_mode: [type: :boolean, default: true],
+                                 diff_max_bytes: [type: :pos_integer, default: @default_diff_max_bytes],
+                                 diff_max_lines: [type: :pos_integer, default: @default_diff_max_lines]
                                ]
                              ],
                              hooks: [
@@ -360,6 +364,16 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:claude, :print_mode])
   end
 
+  @spec claude_diff_max_bytes() :: pos_integer()
+  def claude_diff_max_bytes do
+    get_in(validated_workflow_options(), [:claude, :diff_max_bytes])
+  end
+
+  @spec claude_diff_max_lines() :: pos_integer()
+  def claude_diff_max_lines do
+    get_in(validated_workflow_options(), [:claude, :diff_max_lines])
+  end
+
   @spec workflow_prompt() :: String.t()
   def workflow_prompt do
     case current_workflow() do
@@ -545,6 +559,8 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:version_range, scalar_string_value(Map.get(section, "version_range")))
     |> put_if_present(:mcp_config_path, binary_value(Map.get(section, "mcp_config_path")))
     |> put_if_present(:print_mode, boolean_value(Map.get(section, "print_mode")))
+    |> put_if_present(:diff_max_bytes, positive_integer_value(Map.get(section, "diff_max_bytes")))
+    |> put_if_present(:diff_max_lines, positive_integer_value(Map.get(section, "diff_max_lines")))
   end
 
   defp extract_hooks_options(section) do
