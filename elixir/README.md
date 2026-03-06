@@ -148,10 +148,11 @@ codex:
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
 
-## Dual Backend Support
+## Backend Configuration
 
-Symphony supports two agent backends: **Codex** (default) and **Claude**. The backend is selected
-via the `agent.backend` configuration option in `WORKFLOW.md`.
+This branch exposes backend-related workflow settings, but the runtime execution path is still
+Codex-only. `agent.backend` is parsed and validated so unsupported selections fail clearly instead
+of being silently ignored.
 
 ### Codex Backend (Default)
 
@@ -170,9 +171,10 @@ codex:
 
 See the [Codex documentation](https://developers.openai.com/codex/app-server/) for available options.
 
-### Claude Backend
+### Claude Configuration Groundwork
 
-The Claude backend uses Anthropic's Claude CLI with the `--print` mode for structured output:
+Claude-specific settings are accepted in `WORKFLOW.md` so workflow files and docs can be prepared
+ahead of the runtime backend landing:
 
 ```yaml
 agent:
@@ -185,41 +187,11 @@ claude:
   read_timeout_ms: 300000
 ```
 
-#### Claude CLI Requirements
+Current limitation:
 
-- The `claude` command must be available in PATH
-- Requires Claude CLI version 1.0 or higher (see [docs/claude_cli_compat.md](docs/claude_cli_compat.md) for validated versions)
-- Requires `--print` mode support (available in CLI version 1.0+)
-- For Linear integration, configure the Linear MCP server (see below)
-
-#### Linear MCP for Claude Backend
-
-When using the Claude backend, you must configure the Linear MCP server to enable Linear operations:
-
-```yaml
-claude:
-  command: claude
-  mcp_config_path: /path/to/mcp-config.json  # optional, required for Linear MCP
-```
-
-The MCP config file should contain the Linear MCP server configuration:
-
-```json
-{
-  "mcpServers": {
-    "linear": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-linear"]
-    }
-  }
-}
-```
-
-**Failure mode**: If Linear MCP is not configured, the Claude backend will start but Linear operations
-will not be available. The agent will need to handle Linear operations through alternative methods or
-will report missing capability errors.
-
-See [docs/claude_cli_compat.md](docs/claude_cli_compat.md) for detailed compatibility information.
+- Setting `agent.backend: claude` is not executable in this branch and will fail validation/runtime.
+- The live orchestration path still uses the Codex backend.
+- [docs/claude_cli_compat.md](docs/claude_cli_compat.md) records rollout targets and prerequisites for the upcoming Claude backend instead of documenting a fully active integration.
 
 ## Web dashboard
 

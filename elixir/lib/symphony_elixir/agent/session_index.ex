@@ -13,7 +13,7 @@ defmodule SymphonyElixir.Agent.SessionIndex do
   alias SymphonyElixir.Agent.Backend
 
   @table_name :symphony_session_index
-  @table_options [:named_table, :set, {:read_concurrency, true}, {:write_concurrency, true}]
+  @table_options [:named_table, :public, :set, {:read_concurrency, true}, {:write_concurrency, true}]
 
   # ============================================================================
   # Client API

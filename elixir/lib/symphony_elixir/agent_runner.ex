@@ -1,34 +1,64 @@
 defmodule SymphonyElixir.AgentRunner do
   @moduledoc """
-  Executes a single Linear issue in an isolated workspace with Codex.
+  Executes a single Linear issue in an isolated workspace with the configured backend.
   """
 
   require Logger
-  alias SymphonyElixir.Codex.AppServer
+  alias SymphonyElixir.Agent.CodexBackend
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
     Logger.info("Starting agent run for #{issue_context(issue)}")
 
-    case Workspace.create_for_issue(issue) do
-      {:ok, workspace} ->
-        try do
-          with :ok <- Workspace.run_before_run_hook(workspace, issue),
-               :ok <- run_codex_turns(workspace, issue, codex_update_recipient, opts) do
-            :ok
-          else
-            {:error, reason} ->
-              Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
-              raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
-          end
-        after
-          Workspace.run_after_run_hook(workspace, issue)
+    case resolve_backend_module(opts) do
+      {:ok, backend_module} ->
+        case Workspace.create_for_issue(issue) do
+          {:ok, workspace} ->
+            try do
+              with :ok <- Workspace.run_before_run_hook(workspace, issue),
+                   :ok <- run_backend_turns(backend_module, workspace, issue, codex_update_recipient, opts) do
+                :ok
+              else
+                {:error, reason} ->
+                  Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
+                  raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
+              end
+            after
+              Workspace.run_after_run_hook(workspace, issue)
+            end
+
+          {:error, reason} ->
+            Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
+            raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
         end
 
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
         raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
+    end
+  end
+
+  defp resolve_backend_module(opts) do
+    case Keyword.get(opts, :backend_module) do
+      nil ->
+        configured_backend_module()
+
+      backend_module when is_atom(backend_module) ->
+        {:ok, backend_module}
+
+      other ->
+        {:error, {:invalid_backend_module, other}}
+    end
+  end
+
+  defp configured_backend_module do
+    case Config.agent_backend() do
+      "codex" ->
+        {:ok, CodexBackend}
+
+      backend ->
+        {:error, {:unsupported_agent_backend, backend}}
     end
   end
 
@@ -46,25 +76,45 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_codex_update(_recipient, _issue, _message), do: :ok
 
-  defp run_codex_turns(workspace, issue, codex_update_recipient, opts) do
+  defp run_backend_turns(backend_module, workspace, issue, codex_update_recipient, opts) do
     max_turns = Keyword.get(opts, :max_turns, Config.agent_max_turns())
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
-    with {:ok, session} <- AppServer.start_session(workspace) do
+    with {:ok, session} <- backend_module.start_session(workspace) do
       try do
-        do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
+        do_run_backend_turns(
+          backend_module,
+          session,
+          workspace,
+          issue,
+          codex_update_recipient,
+          opts,
+          issue_state_fetcher,
+          1,
+          max_turns
+        )
       after
-        AppServer.stop_session(session)
+        backend_module.stop_session(session)
       end
     end
   end
 
-  defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+  defp do_run_backend_turns(
+         backend_module,
+         session,
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         issue_state_fetcher,
+         turn_number,
+         max_turns
+       ) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
     with {:ok, turn_session} <-
-           AppServer.run_turn(
-             app_session,
+           backend_module.run_turn(
+             session,
              prompt,
              issue,
              on_message: codex_message_handler(codex_update_recipient, issue)
@@ -75,8 +125,9 @@ defmodule SymphonyElixir.AgentRunner do
         {:continue, refreshed_issue} when turn_number < max_turns ->
           Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
-          do_run_codex_turns(
-            app_session,
+          do_run_backend_turns(
+            backend_module,
+            session,
             workspace,
             refreshed_issue,
             codex_update_recipient,

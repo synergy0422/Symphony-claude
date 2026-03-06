@@ -16,6 +16,7 @@ defmodule SymphonyElixir.CoreTest do
     assert Config.linear_terminal_states() == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert Config.linear_assignee() == nil
     assert Config.agent_max_turns() == 20
+    assert Config.agent_backend() == "codex"
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
     assert Config.poll_interval_ms() == 30_000
@@ -69,6 +70,28 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: 123)
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(), schema_version: 99)
+
+    assert {:error, {:unsupported_schema_version, 99, supported: [1]}} =
+             Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      schema_version: 1,
+      agent_backend: "claude",
+      claude_command: "claude-custom",
+      claude_turn_timeout_ms: 180_000,
+      claude_read_timeout_ms: 300_000
+    )
+
+    assert Config.schema_version() == 1
+    assert Config.agent_backend() == "claude"
+    assert Config.claude_command() == "claude-custom"
+    assert Config.claude_turn_timeout_ms() == 180_000
+    assert Config.claude_read_timeout_ms() == 300_000
+
+    assert {:error, {:unsupported_agent_backend, "claude", supported: ["codex"]}} =
+             Config.validate!()
   end
 
   test "current WORKFLOW.md file is valid and complete" do
@@ -946,6 +969,24 @@ defmodule SymphonyElixir.CoreTest do
       assert session_id == "thread-live-turn-live"
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner fails fast when workflow selects an unavailable backend" do
+    issue = %Issue{
+      id: "issue-unavailable-backend",
+      identifier: "MT-CLAUDE",
+      title: "Unavailable backend",
+      description: "Selected backend is not available in this branch",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-CLAUDE",
+      labels: ["backend"]
+    }
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_backend: "claude")
+
+    assert_raise RuntimeError, ~r/unsupported_agent_backend/, fn ->
+      AgentRunner.run(issue)
     end
   end
 

@@ -46,6 +46,7 @@ defmodule SymphonyElixir.Config do
   @default_server_host "127.0.0.1"
   @default_claude_command "claude"
   @supported_schema_versions [1]
+  @supported_agent_backends ["codex"]
   @workflow_options_schema NimbleOptions.new!(
                              schema_version: [
                                type: {:or, [:integer, nil]},
@@ -415,6 +416,7 @@ defmodule SymphonyElixir.Config do
   def validate! do
     with {:ok, _workflow} <- current_workflow(),
          :ok <- require_valid_schema_version(),
+         :ok <- require_valid_agent_backend(),
          :ok <- require_tracker_kind(),
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
@@ -448,6 +450,19 @@ defmodule SymphonyElixir.Config do
 
       version ->
         {:error, {:unsupported_schema_version, version, supported: @supported_schema_versions}}
+    end
+  end
+
+  defp require_valid_agent_backend do
+    case agent_backend() do
+      backend when backend in @supported_agent_backends ->
+        :ok
+
+      backend when is_binary(backend) ->
+        {:error, {:unsupported_agent_backend, backend, supported: @supported_agent_backends}}
+
+      backend ->
+        {:error, {:unsupported_agent_backend, inspect(backend), supported: @supported_agent_backends}}
     end
   end
 
@@ -511,7 +526,7 @@ defmodule SymphonyElixir.Config do
 
   defp extract_workflow_options(config) do
     %{
-      schema_version: extract_schema_version(section_map(config, "schema_version")),
+      schema_version: extract_schema_version(Map.get(config, "schema_version")),
       tracker: extract_tracker_options(section_map(config, "tracker")),
       polling: extract_polling_options(section_map(config, "polling")),
       workspace: extract_workspace_options(section_map(config, "workspace")),
@@ -524,8 +539,8 @@ defmodule SymphonyElixir.Config do
     }
   end
 
-  defp extract_schema_version(section) do
-    case integer_value(Map.get(section, "schema_version")) do
+  defp extract_schema_version(value) do
+    case integer_value(value) do
       :omit -> nil
       value -> value
     end
@@ -553,6 +568,7 @@ defmodule SymphonyElixir.Config do
 
   defp extract_agent_options(section) do
     %{}
+    |> put_if_present(:backend, scalar_string_value(Map.get(section, "backend")))
     |> put_if_present(:max_concurrent_agents, integer_value(Map.get(section, "max_concurrent_agents")))
     |> put_if_present(:max_turns, positive_integer_value(Map.get(section, "max_turns")))
     |> put_if_present(:max_retry_backoff_ms, positive_integer_value(Map.get(section, "max_retry_backoff_ms")))
