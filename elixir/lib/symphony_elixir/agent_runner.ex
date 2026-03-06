@@ -11,9 +11,9 @@ defmodule SymphonyElixir.AgentRunner do
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   # Backend module lookup
-  # ClaudeBackend will be added in US-005
   @backend_modules %{
-    :codex => SymphonyElixir.Agent.CodexBackend
+    :codex => SymphonyElixir.Agent.CodexBackend,
+    :claude => SymphonyElixir.Agent.ClaudeBackend
   }
 
   # ============================================================================

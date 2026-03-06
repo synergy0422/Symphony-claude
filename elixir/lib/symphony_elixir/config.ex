@@ -40,6 +40,8 @@ defmodule SymphonyElixir.Config do
     }
   }
   @default_codex_thread_sandbox "workspace-write"
+  @default_claude_command "claude"
+  @default_claude_version_range ">=1.0.0"
   @default_observability_enabled true
   @default_observability_refresh_ms 1_000
   @default_observability_render_interval_ms 16
@@ -121,6 +123,16 @@ defmodule SymphonyElixir.Config do
                                    type: :integer,
                                    default: @default_codex_stall_timeout_ms
                                  ]
+                               ]
+                             ],
+                             claude: [
+                               type: :map,
+                               default: %{},
+                               keys: [
+                                 command: [type: :string, default: @default_claude_command],
+                                 version_range: [type: :string, default: @default_claude_version_range],
+                                 mcp_config_path: [type: {:or, [:string, nil]}, default: nil],
+                                 print_mode: [type: :boolean, default: true]
                                ]
                              ],
                              hooks: [
@@ -328,6 +340,26 @@ defmodule SymphonyElixir.Config do
     |> max(0)
   end
 
+  @spec claude_command() :: String.t()
+  def claude_command do
+    get_in(validated_workflow_options(), [:claude, :command])
+  end
+
+  @spec claude_version_range() :: String.t()
+  def claude_version_range do
+    get_in(validated_workflow_options(), [:claude, :version_range])
+  end
+
+  @spec claude_mcp_config_path() :: String.t() | nil
+  def claude_mcp_config_path do
+    get_in(validated_workflow_options(), [:claude, :mcp_config_path])
+  end
+
+  @spec claude_print_mode?() :: boolean()
+  def claude_print_mode? do
+    get_in(validated_workflow_options(), [:claude, :print_mode])
+  end
+
   @spec workflow_prompt() :: String.t()
   def workflow_prompt do
     case current_workflow() do
@@ -460,6 +492,7 @@ defmodule SymphonyElixir.Config do
       workspace: extract_workspace_options(section_map(config, "workspace")),
       agent: extract_agent_options(section_map(config, "agent")),
       codex: extract_codex_options(section_map(config, "codex")),
+      claude: extract_claude_options(section_map(config, "claude")),
       hooks: extract_hooks_options(section_map(config, "hooks")),
       observability: extract_observability_options(section_map(config, "observability")),
       server: extract_server_options(section_map(config, "server"))
@@ -504,6 +537,14 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:turn_timeout_ms, integer_value(Map.get(section, "turn_timeout_ms")))
     |> put_if_present(:read_timeout_ms, integer_value(Map.get(section, "read_timeout_ms")))
     |> put_if_present(:stall_timeout_ms, integer_value(Map.get(section, "stall_timeout_ms")))
+  end
+
+  defp extract_claude_options(section) do
+    %{}
+    |> put_if_present(:command, command_value(Map.get(section, "command")))
+    |> put_if_present(:version_range, scalar_string_value(Map.get(section, "version_range")))
+    |> put_if_present(:mcp_config_path, binary_value(Map.get(section, "mcp_config_path")))
+    |> put_if_present(:print_mode, boolean_value(Map.get(section, "print_mode")))
   end
 
   defp extract_hooks_options(section) do
