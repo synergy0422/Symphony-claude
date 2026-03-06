@@ -82,6 +82,10 @@ defmodule SymphonyElixir.Config do
                                type: :map,
                                default: %{},
                                keys: [
+                                 backend: [
+                                   type: {:or, [:atom, :string]},
+                                   default: :codex
+                                 ],
                                  max_concurrent_agents: [
                                    type: :integer,
                                    default: @default_max_concurrent_agents
@@ -262,6 +266,11 @@ defmodule SymphonyElixir.Config do
   @spec agent_max_turns() :: pos_integer()
   def agent_max_turns do
     get_in(validated_workflow_options(), [:agent, :max_turns])
+  end
+
+  @spec agent_backend() :: atom()
+  def agent_backend do
+    get_in(validated_workflow_options(), [:agent, :backend]) || :codex
   end
 
   @spec max_concurrent_agents_for_state(term()) :: pos_integer()
@@ -479,6 +488,7 @@ defmodule SymphonyElixir.Config do
 
   defp extract_agent_options(section) do
     %{}
+    |> put_if_present(:backend, backend_value(Map.get(section, "backend")))
     |> put_if_present(:max_concurrent_agents, integer_value(Map.get(section, "max_concurrent_agents")))
     |> put_if_present(:max_turns, positive_integer_value(Map.get(section, "max_turns")))
     |> put_if_present(:max_retry_backoff_ms, positive_integer_value(Map.get(section, "max_retry_backoff_ms")))
@@ -558,6 +568,17 @@ defmodule SymphonyElixir.Config do
   end
 
   defp command_value(_value), do: :omit
+
+  defp backend_value(nil), do: :omit
+  defp backend_value(value) when is_atom(value), do: value
+
+  defp backend_value(value) when is_binary(value) do
+    case String.trim(value) |> String.downcase() do
+      "codex" -> :codex
+      "claude" -> :claude
+      _ -> :omit
+    end
+  end
 
   defp hook_command_value(value) when is_binary(value) do
     case String.trim(value) do
