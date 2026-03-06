@@ -140,19 +140,15 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
     # Validate explicit MCP config path if provided
     case validate_mcp_config_path(explicit_mcp_config_path) do
       :ok ->
-        # Either use explicit path or generate one
-        {mcp_config_path, mcp_config_generated} =
-          case generate_mcp_config(explicit_mcp_config_path) do
-            {:ok, generated_path} -> {generated_path, true}
-            :noop -> {explicit_mcp_config_path, false}
-            {:error, reason} -> {:error, reason}
-          end
+        case generate_mcp_config(explicit_mcp_config_path) do
+          {:ok, generated_path} ->
+            do_start_session(workspace, generated_path, true)
 
-        # Check if we have an error from above
-        if is_binary(mcp_config_path) or mcp_config_path == nil do
-          do_start_session(workspace, mcp_config_path, mcp_config_generated)
-        else
-          {:error, mcp_config_path}
+          :noop ->
+            do_start_session(workspace, explicit_mcp_config_path, false)
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       {:error, reason} ->
@@ -252,8 +248,9 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
     end
 
     # Clean up generated MCP config file if applicable
-    mcp_config_path = Map.get(session_handle, :mcp_config_path)
-    mcp_config_generated = Map.get(session_handle, :metadata, %{}) |> Map.get(:mcp_config_generated, false)
+    metadata = Map.get(session_handle, :metadata, %{})
+    mcp_config_path = Map.get(metadata, :mcp_config_path)
+    mcp_config_generated = Map.get(metadata, :mcp_config_generated, false)
     cleanup_mcp_config(mcp_config_path, mcp_config_generated)
 
     # Unregister session
@@ -295,25 +292,31 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
   end
 
   defp parse_version(output) do
-    # Expected format: "Claude CLI x.x.x"
-    case Regex.run(~r/Claude CLI (\d+)\.(\d+)\.(\d+)/, output) do
-      [_, major, minor, patch] ->
-        {:ok, {String.to_integer(major), String.to_integer(minor), String.to_integer(patch)}}
+    case Regex.run(~r/(?:^|[^\d])(\d+\.\d+\.\d+)(?:[^\d]|$)/, output, capture: :all_but_first) do
+      [version] ->
+        case Version.parse(version) do
+          {:ok, parsed_version} -> {:ok, parsed_version}
+          :error -> {:error, :invalid_semver}
+        end
 
       _ ->
         {:error, :version_format_unexpected}
     end
   end
 
-  defp check_version_compatibility(version) do
-    # Simple version range check - for now just check if >= 1.0.0
-    # TODO: Implement proper semver range matching
-    case version do
-      {major, _, _} when major >= 1 ->
-        :ok
+  defp check_version_compatibility(%Version{} = version) do
+    version_range = SymphonyElixir.Config.claude_version_range()
 
-      _ ->
-        {:error, {:incompatible_version, version}}
+    case Version.parse_requirement(version_range) do
+      {:ok, requirement} ->
+        if Version.match?(version, requirement) do
+          :ok
+        else
+          {:error, {:incompatible_version, to_string(version), version_range}}
+        end
+
+      :error ->
+        {:error, {:invalid_version_range, version_range}}
     end
   end
 
