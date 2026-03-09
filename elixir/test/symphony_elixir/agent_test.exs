@@ -48,7 +48,7 @@ defmodule SymphonyElixir.AgentTest do
       state = StreamParser.new()
       {:ok, frames, _new_state} = StreamParser.parse(~s({"key": "value"}), state)
 
-      assert length(frames) >= 1
+      assert frames != []
       assert Enum.any?(frames, fn f -> f["key"] == "value" end)
     end
 

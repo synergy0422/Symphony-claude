@@ -8,8 +8,8 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
 
   require Logger
 
-  alias SymphonyElixir.Agent.SessionIndex
   alias SymphonyElixir.Agent.ClaudeParser
+  alias SymphonyElixir.Agent.SessionIndex
 
   @behaviour SymphonyElixir.Agent.Backend
 
@@ -87,23 +87,31 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
           "mcpServers" => %{}
         }
 
-        case Jason.encode_to_iodata(mcp_config) do
-          {:ok, json} ->
-            case File.write(config_path, json) do
-              :ok ->
-                Logger.debug("Generated MCP config at: #{config_path}")
-                {:ok, config_path}
-
-              {:error, reason} ->
-                {:error, {:mcp_config_write_failed, config_path, reason}}
-            end
-
-          {:error, reason} ->
-            {:error, {:mcp_config_encode_failed, reason}}
-        end
+        write_mcp_config(config_path, mcp_config)
 
       {:error, reason} ->
         {:error, {:mcp_tmp_dir_failed, tmp_dir, reason}}
+    end
+  end
+
+  defp write_mcp_config(config_path, mcp_config) do
+    case Jason.encode_to_iodata(mcp_config) do
+      {:ok, json} ->
+        persist_mcp_config(config_path, json)
+
+      {:error, reason} ->
+        {:error, {:mcp_config_encode_failed, reason}}
+    end
+  end
+
+  defp persist_mcp_config(config_path, json) do
+    case File.write(config_path, json) do
+      :ok ->
+        Logger.debug("Generated MCP config at: #{config_path}")
+        {:ok, config_path}
+
+      {:error, reason} ->
+        {:error, {:mcp_config_write_failed, config_path, reason}}
     end
   end
 
@@ -339,12 +347,7 @@ defmodule SymphonyElixir.Agent.ClaudeBackend do
         args ++ ["--mcp-config", mcp_path]
     end
     |> then(fn args ->
-      # Add allowed directories if workspace is specified
-      if workspace do
-        args ++ ["--allowedDirectories", workspace]
-      else
-        args
-      end
+      args ++ ["--allowedDirectories", workspace]
     end)
   end
 

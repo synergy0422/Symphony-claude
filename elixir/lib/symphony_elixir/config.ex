@@ -48,8 +48,10 @@ defmodule SymphonyElixir.Config do
   @default_observability_render_interval_ms 16
   @default_server_host "127.0.0.1"
   @default_claude_command "claude"
+  @default_pipeline []
   @supported_schema_versions [1]
   @supported_agent_backends ["codex", "claude"]
+  @supported_stage_roles ["implementer", "reviewer"]
   @workflow_options_schema NimbleOptions.new!(
                              schema_version: [
                                type: {:or, [:integer, nil]},
@@ -94,7 +96,11 @@ defmodule SymphonyElixir.Config do
                                keys: [
                                  backend: [
                                    type: {:or, [:string, nil]},
-                                   default: "codex"
+                                   default: nil
+                                 ],
+                                 pipeline: [
+                                   type: {:list, :map},
+                                   default: @default_pipeline
                                  ],
                                  max_concurrent_agents: [
                                    type: :integer,
@@ -300,7 +306,26 @@ defmodule SymphonyElixir.Config do
 
   @spec agent_backend() :: String.t()
   def agent_backend do
-    get_in(validated_workflow_options(), [:agent, :backend]) || "codex"
+    # If pipeline is defined, use first stage's backend for backward compatibility
+    # This ensures single-backend behavior is preserved
+    if pipeline_enabled?() do
+      case pipeline_stages() do
+        [] -> "codex"
+        [first_stage | _] -> Map.get(first_stage, :backend, "codex")
+      end
+    else
+      get_in(validated_workflow_options(), [:agent, :backend]) || "codex"
+    end
+  end
+
+  @spec pipeline_enabled?() :: boolean()
+  def pipeline_enabled? do
+    pipeline_stages() != []
+  end
+
+  @spec pipeline_stages() :: [map()]
+  def pipeline_stages do
+    get_in(validated_workflow_options(), [:agent, :pipeline]) || []
   end
 
   @spec schema_version() :: pos_integer() | nil
@@ -450,6 +475,7 @@ defmodule SymphonyElixir.Config do
     with {:ok, _workflow} <- current_workflow(),
          :ok <- require_valid_schema_version(),
          :ok <- require_valid_agent_backend(),
+         :ok <- require_valid_pipeline(),
          :ok <- require_tracker_kind(),
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
@@ -493,9 +519,93 @@ defmodule SymphonyElixir.Config do
 
       backend when is_binary(backend) ->
         {:error, {:unsupported_agent_backend, backend, supported: @supported_agent_backends}}
+    end
+  end
 
-      backend ->
-        {:error, {:unsupported_agent_backend, inspect(backend), supported: @supported_agent_backends}}
+  defp require_valid_pipeline do
+    stages = pipeline_stages()
+
+    if stages == [] do
+      :ok
+    else
+      validate_pipeline_stages(stages, 0)
+    end
+  end
+
+  defp validate_pipeline_stages([], _index), do: :ok
+
+  defp validate_pipeline_stages([stage | rest], index) do
+    case validate_stage(stage, index) do
+      :ok -> validate_pipeline_stages(rest, index + 1)
+      error -> error
+    end
+  end
+
+  defp validate_stage(stage, index) do
+    errors =
+      []
+      |> validate_stage_backend(stage, index)
+      |> validate_stage_role(stage, index)
+      |> validate_stage_prompt_template(stage, index)
+
+    case errors do
+      [] -> :ok
+      [{:error, _} | _] -> hd(errors)
+    end
+  end
+
+  defp validate_stage_backend(errors, stage, index) do
+    case Map.fetch(stage, :backend) do
+      {:ok, backend} when is_binary(backend) and backend in @supported_agent_backends ->
+        errors
+
+      {:ok, backend} when is_binary(backend) ->
+        [{:error, {:unsupported_pipeline_backend, index, backend, supported: @supported_agent_backends}} | errors]
+
+      {:ok, nil} ->
+        [{:error, {:missing_pipeline_field, index, :backend}} | errors]
+
+      :error ->
+        [{:error, {:missing_pipeline_field, index, :backend}} | errors]
+    end
+  end
+
+  defp validate_stage_role(errors, stage, index) do
+    case Map.fetch(stage, :role) do
+      {:ok, role} when is_binary(role) and role in @supported_stage_roles ->
+        errors
+
+      {:ok, role} when is_binary(role) ->
+        if byte_size(role) > 0 do
+          [
+            {:error, {:unsupported_pipeline_role, index, role, supported: @supported_stage_roles}}
+            | errors
+          ]
+        else
+          [{:error, {:empty_pipeline_field, index, :role}} | errors]
+        end
+
+      {:ok, nil} ->
+        [{:error, {:missing_pipeline_field, index, :role}} | errors]
+
+      :error ->
+        [{:error, {:missing_pipeline_field, index, :role}} | errors]
+    end
+  end
+
+  defp validate_stage_prompt_template(errors, stage, index) do
+    case Map.fetch(stage, :prompt_template) do
+      {:ok, template} when is_binary(template) and byte_size(template) > 0 ->
+        errors
+
+      {:ok, template} when is_binary(template) ->
+        [{:error, {:empty_pipeline_field, index, :prompt_template}} | errors]
+
+      {:ok, nil} ->
+        [{:error, {:missing_pipeline_field, index, :prompt_template}} | errors]
+
+      :error ->
+        [{:error, {:missing_pipeline_field, index, :prompt_template}} | errors]
     end
   end
 
@@ -621,6 +731,7 @@ defmodule SymphonyElixir.Config do
   defp extract_agent_options(section) do
     %{}
     |> put_if_present(:backend, scalar_string_value(Map.get(section, "backend")))
+    |> put_if_present(:pipeline, pipeline_value(Map.get(section, "pipeline")))
     |> put_if_present(:max_concurrent_agents, integer_value(Map.get(section, "max_concurrent_agents")))
     |> put_if_present(:max_turns, positive_integer_value(Map.get(section, "max_turns")))
     |> put_if_present(:max_retry_backoff_ms, positive_integer_value(Map.get(section, "max_retry_backoff_ms")))
@@ -812,6 +923,42 @@ defmodule SymphonyElixir.Config do
   end
 
   defp state_limits_value(_value), do: :omit
+
+  defp pipeline_value(stages) when is_list(stages) do
+    stages
+    |> Enum.map(&normalize_pipeline_stage/1)
+    |> Enum.reject(&(&1 == :omit))
+  end
+
+  defp pipeline_value(_value), do: []
+
+  defp normalize_pipeline_stage(stage) when is_map(stage) do
+    stage
+    |> Enum.reduce(%{}, fn {key, value}, acc ->
+      normalized_key = normalize_pipeline_key(key)
+      normalized_value = normalize_pipeline_value(value)
+      Map.put(acc, normalized_key, normalized_value)
+    end)
+  end
+
+  defp normalize_pipeline_stage(_), do: :omit
+
+  defp normalize_pipeline_key(key) when is_binary(key) do
+    key
+    |> String.trim()
+    |> String.downcase()
+    |> String.to_atom()
+  end
+
+  defp normalize_pipeline_key(key) when is_atom(key) do
+    key
+  end
+
+  defp normalize_pipeline_value(value) when is_binary(value) do
+    String.trim(value)
+  end
+
+  defp normalize_pipeline_value(value), do: value
 
   defp parse_integer(value) when is_integer(value), do: {:ok, value}
 

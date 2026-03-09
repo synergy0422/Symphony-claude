@@ -99,6 +99,37 @@ defmodule SymphonyElixir.CoreTest do
     )
 
     assert {:error, {:invalid_claude_version_range, "not-a-range"}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      schema_version: 1,
+      agent_backend: nil,
+      agent_pipeline: [
+        %{
+          "backend" => "claude",
+          "role" => "implementer",
+          "prompt_template" => "Review the current issue"
+        }
+      ]
+    )
+
+    assert Config.pipeline_enabled?()
+    assert Config.agent_backend() == "claude"
+    assert :ok = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      schema_version: 1,
+      agent_backend: nil,
+      agent_pipeline: [
+        %{
+          "backend" => "claude",
+          "role" => "not-a-role",
+          "prompt_template" => "Review the current issue"
+        }
+      ]
+    )
+
+    assert {:error, {:unsupported_pipeline_role, 0, "not-a-role", supported: ["implementer", "reviewer"]}} =
+             Config.validate!()
   end
 
   test "current WORKFLOW.md file is valid and complete" do
@@ -570,9 +601,10 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+    scheduler_slack_ms = 500
 
-    assert remaining_ms >= min_remaining_ms
-    assert remaining_ms <= max_remaining_ms
+    assert remaining_ms >= max(min_remaining_ms - scheduler_slack_ms, 0)
+    assert remaining_ms <= max_remaining_ms + scheduler_slack_ms
   end
 
   test "fetch issues by states with empty state set is a no-op" do

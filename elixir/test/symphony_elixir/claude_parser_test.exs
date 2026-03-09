@@ -66,7 +66,7 @@ defmodule SymphonyElixir.ClaudeParserTest do
 
       # Third chunk is incomplete JSON - stays in buffer
       {:ok, events3, state3} = ClaudeParser.parse(state2, "}\n")
-      assert length(events3) == 0
+      assert events3 == []
       assert state3.buffer == "}"
     end
   end
@@ -85,14 +85,14 @@ defmodule SymphonyElixir.ClaudeParserTest do
     end
 
     test "handles unknown event type gracefully" do
-      result = ClaudeParser.parse_frame("{\"type\": \"unknown_event\", \"data\": \"test\"}")
+      result = ClaudeParser.parse_frame(~s({"type": "unknown_event", "data": "test"}))
 
       assert result.type == :error
       assert result.error.unknown_type == "unknown_event"
     end
 
     test "handles partial JSON gracefully" do
-      result = ClaudeParser.parse_frame("{\"type\": \"message_start\"")
+      result = ClaudeParser.parse_frame(~s({"type": "message_start"))
 
       assert result.type == :error
       assert result.error.reason != nil

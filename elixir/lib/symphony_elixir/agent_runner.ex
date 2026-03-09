@@ -69,27 +69,26 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.agent_max_turns())
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
-    with {:ok, session_handle} <- backend_module.start_session(workspace) do
-      monitor_ref = maybe_monitor_backend(session_handle)
+    case backend_module.start_session(workspace) do
+      {:ok, session_handle} ->
+        context = %{
+          backend_module: backend_module,
+          session_handle: session_handle,
+          monitor_ref: maybe_monitor_backend(session_handle),
+          workspace: workspace,
+          update_recipient: update_recipient,
+          opts: opts,
+          issue_state_fetcher: issue_state_fetcher,
+          max_turns: max_turns
+        }
 
-      try do
-        do_run_backend_turns(
-          backend_module,
-          session_handle,
-          monitor_ref,
-          workspace,
-          issue,
-          update_recipient,
-          opts,
-          issue_state_fetcher,
-          1,
-          max_turns
-        )
-      after
-        maybe_demonitor(monitor_ref)
-        backend_module.stop_session(session_handle)
-      end
-    else
+        try do
+          do_run_backend_turns(context, issue, 1)
+        after
+          maybe_demonitor(context.monitor_ref)
+          backend_module.stop_session(session_handle)
+        end
+
       {:error, reason} ->
         Logger.error("Failed to start backend session: #{inspect(reason)}")
         {:error, reason}
@@ -109,45 +108,31 @@ defmodule SymphonyElixir.AgentRunner do
     Process.demonitor(monitor_ref, [:flush])
   end
 
-  defp do_run_backend_turns(
-         backend_module,
-         session_handle,
-         monitor_ref,
-         workspace,
-         issue,
-         update_recipient,
-         opts,
-         issue_state_fetcher,
-         turn_number,
-         max_turns
-       ) do
-    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
-    message_handler = build_message_handler(update_recipient, issue)
-    turn_result = backend_module.run_turn(session_handle, prompt, issue, Keyword.put(opts, :on_message, message_handler))
+  defp do_run_backend_turns(context, issue, turn_number) do
+    prompt = build_turn_prompt(issue, context.opts, turn_number, context.max_turns)
+    message_handler = build_message_handler(context.update_recipient, issue)
+
+    turn_result =
+      context.backend_module.run_turn(
+        context.session_handle,
+        prompt,
+        issue,
+        Keyword.put(context.opts, :on_message, message_handler)
+      )
 
     case turn_result do
       {:ok, turn_session} ->
-        Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
+        Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{context.workspace} turn=#{turn_number}/#{context.max_turns}")
 
-        case continue_with_issue?(issue, issue_state_fetcher) do
-          {:continue, refreshed_issue} when turn_number < max_turns ->
-            Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+        case continue_with_issue?(issue, context.issue_state_fetcher) do
+          {:continue, refreshed_issue} when turn_number < context.max_turns ->
+            Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{context.max_turns}")
 
-            do_run_backend_turns(
-              backend_module,
-              session_handle,
-              monitor_ref,
-              workspace,
-              refreshed_issue,
-              update_recipient,
-              opts,
-              issue_state_fetcher,
-              turn_number + 1,
-              max_turns
-            )
+            do_run_backend_turns(context, refreshed_issue, turn_number + 1)
 
           {:continue, refreshed_issue} ->
             Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+
             :ok
 
           {:done, _refreshed_issue} ->
@@ -158,7 +143,7 @@ defmodule SymphonyElixir.AgentRunner do
         end
 
       {:error, reason} ->
-        case check_backend_down(monitor_ref) do
+        case check_backend_down(context.monitor_ref) do
           {:backend_crashed, crash_reason} ->
             Logger.error("Backend crashed for #{issue_context(issue)}: #{inspect(crash_reason)}")
             {:error, {:backend_crashed, crash_reason}}

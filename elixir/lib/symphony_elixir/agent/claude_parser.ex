@@ -10,7 +10,14 @@ defmodule SymphonyElixir.Agent.ClaudeParser do
   @max_buffer_size 1_000_000
   @truncation_marker "\n\n[... diff truncated]"
 
-  @type event_type :: :message | :content_block_delta | :content_block_start | :content_block_stop | :error | :done | :ping
+  @type event_type ::
+          :message
+          | :content_block_delta
+          | :content_block_start
+          | :content_block_stop
+          | :error
+          | :done
+          | :ping
 
   @type parsed_event :: %{
           required(:type) => event_type(),
@@ -149,38 +156,42 @@ defmodule SymphonyElixir.Agent.ClaudeParser do
   defp extract_complete_frames(["\n"]), do: {[], ""}
 
   defp extract_complete_frames(lines) do
-    {complete, remaining} =
-      Enum.reduce(lines, {[], []}, fn line, {complete, remaining} ->
-        trimmed = String.trim(line)
-
-        cond do
-          trimmed == "" and remaining != [] ->
-            # Empty line with accumulated content - check if it's valid
-            joined = Enum.join(remaining, "\n")
-
-            if match?({:ok, _}, Jason.decode(joined)) do
-              {complete ++ [joined], []}
-            else
-              {complete, remaining}
-            end
-
-          trimmed == "" ->
-            {complete, []}
-
-          match?({:ok, _}, Jason.decode(trimmed)) ->
-            {complete ++ remaining ++ [trimmed], []}
-
-          remaining == [] ->
-            {complete, [line]}
-
-          true ->
-            # Incomplete frame - accumulate
-            {complete, remaining ++ [line]}
-        end
-      end)
+    {complete, remaining} = Enum.reduce(lines, {[], []}, &extract_complete_frame_line/2)
 
     {complete, Enum.join(remaining, "\n")}
   end
+
+  defp extract_complete_frame_line(line, {complete, remaining}) do
+    trimmed = String.trim(line)
+
+    cond do
+      trimmed == "" ->
+        flush_remaining_frame(complete, remaining)
+
+      decoded_json?(trimmed) ->
+        {complete ++ remaining ++ [trimmed], []}
+
+      remaining == [] ->
+        {complete, [line]}
+
+      true ->
+        {complete, remaining ++ [line]}
+    end
+  end
+
+  defp flush_remaining_frame(complete, []), do: {complete, []}
+
+  defp flush_remaining_frame(complete, remaining) do
+    joined = Enum.join(remaining, "\n")
+
+    if decoded_json?(joined) do
+      {complete ++ [joined], []}
+    else
+      {complete, remaining}
+    end
+  end
+
+  defp decoded_json?(data), do: match?({:ok, _}, Jason.decode(data))
 
   @spec to_turn_result([parsed_event()]) :: map()
   def to_turn_result(events) do

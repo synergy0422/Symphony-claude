@@ -1,13 +1,13 @@
-# Symphony Introduction
+# Symphony-claude Introduction
 
-Symphony is an orchestration layer for coding-agent work. Instead of manually
-opening a terminal, copying an issue into a prompt, and supervising every step,
-you give Symphony a workflow contract and let it run issue execution as a
-managed service.
+Symphony-claude is an orchestration layer for coding-agent work. Instead of
+manually opening a terminal, copying an issue into a prompt, and supervising
+every step, you give Symphony a workflow contract and let it run issue
+execution as a managed service.
 
 ## Core Model
 
-At a high level, Symphony does four things:
+At a high level, Symphony-claude does four things:
 
 1. Reads candidate work from Linear
 2. Creates an isolated workspace for each issue
@@ -46,7 +46,8 @@ supports:
 
 ## Operating Assumptions
 
-Symphony assumes a repo and team workflow that are already agent-friendly:
+Symphony-claude assumes a repo and team workflow that are already
+agent-friendly:
 
 - the target repository can be cloned and bootstrapped non-interactively,
 - the agent CLI and its credentials already exist on the host,
@@ -59,7 +60,7 @@ orchestration service.
 
 ## Minimal Adoption Path
 
-To adopt Symphony for another repository:
+To adopt Symphony-claude for another repository:
 
 1. Pick the implementation path: use `elixir/` directly or reimplement from
    `SPEC.md`.
@@ -75,7 +76,7 @@ To adopt Symphony for another repository:
 
 ## What Symphony Is Not
 
-Symphony is not:
+Symphony-claude is not:
 
 - a hosted SaaS,
 - a multi-tenant job platform,

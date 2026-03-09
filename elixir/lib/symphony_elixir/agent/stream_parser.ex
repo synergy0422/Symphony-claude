@@ -48,9 +48,6 @@ defmodule SymphonyElixir.Agent.StreamParser do
 
         {:incomplete, rest} ->
           {:partial, %{state | buffer: rest}}
-
-        {:error, reason} ->
-          {:error, reason, %{state | buffer: "", error_count: state.error_count + 1}}
       end
     end
   end
@@ -89,9 +86,6 @@ defmodule SymphonyElixir.Agent.StreamParser do
 
       {:incomplete, rest} ->
         {:ok, state.frames, %{state | buffer: rest}}
-
-      {:error, reason} ->
-        {:error, reason, %{state | buffer: "", error_count: state.error_count + 1}}
     end
   end
 
@@ -102,42 +96,52 @@ defmodule SymphonyElixir.Agent.StreamParser do
   defp extract_frames("", acc), do: {:ok, Enum.reverse(acc), ""}
 
   defp extract_frames(buffer, acc) do
-    # Try to decode the entire buffer as JSON
     case Jason.decode(buffer) do
       {:ok, frame} when is_map(frame) ->
-        # Successfully decoded the entire buffer as one JSON object
         {:ok, [frame | acc], ""}
 
       {:ok, _} ->
-        # Decoded but not a map (e.g., array) - treat as single frame
         {:ok, [buffer | acc], ""}
 
       {:error, _decode_error} ->
-        # Try line-by-line parsing for NDJSON (newline-delimited JSON)
-        case parse_ndjson(buffer) do
-          {:ok, frames, rest} when frames != [] ->
-            {:ok, frames ++ acc, rest}
+        extract_undecodable_frames(buffer, acc)
+    end
+  end
 
-          _ ->
-            # Check if it's incomplete JSON
-            if incomplete_json?(buffer) do
-              {:incomplete, buffer}
-            else
-              # Try to find JSON boundary
-              case find_json_boundary(buffer) do
-                {:found, boundary} when boundary > 0 ->
-                  {prefix, rest} = String.split_at(buffer, boundary)
+  defp extract_undecodable_frames(buffer, acc) do
+    case parse_ndjson(buffer) do
+      {:ok, frames, rest} when frames != [] ->
+        {:ok, frames ++ acc, rest}
 
-                  case Jason.decode(prefix) do
-                    {:ok, frame} -> extract_frames(rest, [frame | acc])
-                    {:error, _} -> {:incomplete, buffer}
-                  end
+      _ ->
+        extract_incomplete_or_bounded_frames(buffer, acc)
+    end
+  end
 
-                _ ->
-                  {:incomplete, buffer}
-              end
-            end
-        end
+  defp extract_incomplete_or_bounded_frames(buffer, acc) do
+    if incomplete_json?(buffer) do
+      {:incomplete, buffer}
+    else
+      extract_frames_at_boundary(buffer, acc)
+    end
+  end
+
+  defp extract_frames_at_boundary(buffer, acc) do
+    case find_json_boundary(buffer) do
+      {:found, boundary} when boundary > 0 ->
+        decode_frame_prefix(buffer, acc, boundary)
+
+      _ ->
+        {:incomplete, buffer}
+    end
+  end
+
+  defp decode_frame_prefix(buffer, acc, boundary) do
+    {prefix, rest} = String.split_at(buffer, boundary)
+
+    case Jason.decode(prefix) do
+      {:ok, frame} -> extract_frames(rest, [frame | acc])
+      {:error, _} -> {:incomplete, buffer}
     end
   end
 
@@ -158,7 +162,7 @@ defmodule SymphonyElixir.Agent.StreamParser do
     remaining_lines = Enum.drop(all_lines, processed_count)
     rest = Enum.join(remaining_lines, "\n")
 
-    if length(frames) > 0 do
+    if frames != [] do
       {:ok, Enum.reverse(frames), rest}
     else
       {:incomplete, buffer}

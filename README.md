@@ -1,9 +1,10 @@
-# Symphony
+# Symphony-claude
 
-Symphony is a long-running orchestration service for coding agents. It watches
-an issue tracker, creates an isolated workspace for each issue, launches an
-agent run inside that workspace, and keeps enough state and observability
-around the run to operate it as a real workflow instead of a one-off script.
+Symphony-claude is a long-running orchestration service for coding agents. It
+watches an issue tracker, creates an isolated workspace for each issue,
+launches an agent run inside that workspace, and keeps enough state and
+observability around the run to operate it as a real workflow instead of a
+one-off script.
 
 [![Symphony demo video preview](.github/media/symphony-demo-poster.jpg)](.github/media/symphony-demo.mp4)
 
@@ -12,11 +13,11 @@ Linear board, dispatches work to isolated agent runs, and keeps the workflow
 moving through implementation, validation, and handoff._
 
 > [!WARNING]
-> Symphony is still an engineering-preview codebase. It is usable in trusted
-> environments, but it should be treated as an internal automation system, not
-> a hardened multi-tenant platform.
+> Symphony-claude is still an engineering-preview codebase. It is usable in
+> trusted environments, but it should be treated as an internal automation
+> system, not a hardened multi-tenant platform.
 
-## What Symphony Does
+## What Symphony-claude Does
 
 - Polls Linear for issues in configured active states
 - Creates one workspace per issue under a controlled workspace root
@@ -46,7 +47,7 @@ The Elixir runtime is the practical entrypoint today. It includes:
 If you want to run the implementation in this repository:
 
 ```bash
-git clone https://github.com/synergy0422/symphony.git
+git clone https://github.com/synergy0422/Symphony-claude.git
 cd symphony/elixir
 mise trust
 mise install
@@ -63,7 +64,7 @@ Start with [elixir/README.md](elixir/README.md) for the full runtime guide and
 [docs/INTRODUCTION.md](docs/INTRODUCTION.md) for a higher-level overview of how
 to adopt Symphony in your own repo.
 
-## How Symphony Is Structured
+## How Symphony-claude Is Structured
 
 - [SPEC.md](SPEC.md): service contract and architecture
 - [elixir/README.md](elixir/README.md): runtime setup, configuration, and
@@ -77,7 +78,7 @@ to adopt Symphony in your own repo.
 
 ## Who This Is For
 
-Symphony is a good fit if you already have:
+Symphony-claude is a good fit if you already have:
 
 - a repo that is prepared for agent-driven development,
 - a Linear-based engineering workflow,

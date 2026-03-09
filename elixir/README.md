@@ -1,16 +1,16 @@
-# Symphony Elixir
+# Symphony-claude Elixir
 
-This directory contains the current Elixir/OTP implementation of Symphony,
-based on [`SPEC.md`](../SPEC.md) at the repository root.
+This directory contains the current Elixir/OTP implementation of
+Symphony-claude, based on [`SPEC.md`](../SPEC.md) at the repository root.
 
 > [!WARNING]
-> Symphony Elixir is prototype software intended for evaluation in trusted
-> environments. It is useful and extensible, but it is still an
+> Symphony-claude Elixir is prototype software intended for evaluation in
+> trusted environments. It is useful and extensible, but it is still an
 > operator-managed internal system rather than a hardened product.
 
 ## Screenshot
 
-![Symphony Elixir screenshot](../.github/media/elixir-screenshot.png)
+![Symphony-claude Elixir screenshot](../.github/media/elixir-screenshot.png)
 
 ## What This Runtime Does
 
@@ -50,7 +50,7 @@ You also need:
 ## Quick Start
 
 ```bash
-git clone https://github.com/synergy0422/symphony.git
+git clone https://github.com/synergy0422/Symphony-claude.git
 cd symphony/elixir
 mise trust
 mise install

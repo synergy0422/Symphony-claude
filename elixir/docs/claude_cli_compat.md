@@ -1,6 +1,7 @@
 # Claude CLI Compatibility Notes
 
-This document records the compatibility target for Symphony's Claude backend.
+This document records the compatibility target for Symphony-claude's Claude
+backend.
 
 In this repository, the Claude backend is wired as an execution path through
 `agent.backend: claude`, but it still depends on the local Claude CLI matching
@@ -8,7 +9,7 @@ the expected non-interactive interface.
 
 ## Expected CLI Surface
 
-Symphony expects the configured `claude.command` to support:
+Symphony-claude expects the configured `claude.command` to support:
 
 - `--version`
 - `--print`
@@ -28,7 +29,7 @@ The current backend validates or assumes:
 
 ## Operator Guidance
 
-Before running Symphony with `agent.backend: claude`:
+Before running Symphony-claude with `agent.backend: claude`:
 
 1. Verify `claude --version` succeeds on the target host.
 2. Verify the CLI really supports `--print` mode in unattended runs.
